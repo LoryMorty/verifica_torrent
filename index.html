@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Piattaforma Torrent - SPA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f5f5f5; }
+    header { background: #20232a; color: white; padding: 10px 16px;
+             display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 18px; }
+    nav a { color: #61dafb; text-decoration: none; margin-left: 12px; font-size: 14px; }
+    nav a:hover { text-decoration: underline; }
+    main { max-width: 1000px; margin: 0 auto; padding: 16px; }
+    .card { background: white; padding: 12px 16px; border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
+    .card h3 { margin-top: 0; }
+    .badge { display: inline-block; padding: 2px 6px; margin-right: 4px; margin-bottom: 4px;
+             font-size: 11px; background: #eee; border-radius: 4px; }
+    button { padding: 8px 12px; border-radius: 4px; border: none; background: #20232a;
+             color: white; cursor: pointer; font-size: 14px; }
+    button:hover { background: #333845; }
+    input, textarea { padding: 6px; font-size: 14px; width: 100%; box-sizing: border-box; }
+    label { font-size: 14px; margin-top: 4px; display: block; }
+    .error { color: red; margin-top: 8px; }
+    .success { color: green; margin-top: 8px; }
+    .link { color: #007bff; text-decoration: underline; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Piattaforma Torrent</h1>
+    <nav>
+      <a href="#/">Home</a>
+      <a href="#/upload">Carica torrent</a>
+      <a href="#/login" id="nav-login">Login</a>
+      <a href="#/logout" id="nav-logout" style="display:none;">Logout</a>
+    </nav>
+  </header>
+
+  <main id="app"></main>
+
+  <script>
+    const state = {
+      user: null,
+      token: null,
+      torrents: []
+    };
+
+    const API_BASE = "/api";
+
+    async function apiGet(path) {
+      const headers = {};
+      if (state.token) headers["Authorization"] = "Bearer " + state.token;
+      const res = await fetch(API_BASE + path, { headers });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Errore GET " + path);
+      return data;
+    }
+
+    async function apiPost(path, body) {
+      const headers = { "Content-Type": "application/json" };
+      if (state.token) headers["Authorization"] = "Bearer " + state.token;
+      const res = await fetch(API_BASE + path, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Errore POST " + path);
+      return data;
+    }
+
+    async function apiDelete(path) {
+      const headers = {};
+      if (state.token) headers["Authorization"] = "Bearer " + state.token;
+      const res = await fetch(API_BASE + path, { method: "DELETE", headers });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Errore DELETE " + path);
+      return data;
+    }
+
+    function loadSession() {
+      try {
+        const t = localStorage.getItem("token");
+        const u = localStorage.getItem("user");
+        if (t && u) {
+          state.token = t;
+          state.user = JSON.parse(u);
+        }
+      } catch(e) {}
+    }
+
+    function saveSession() {
+      if (state.token && state.user) {
+        localStorage.setItem("token", state.token);
+        localStorage.setItem("user", JSON.stringify(state.user));
+      }
+    }
+
+    function clearSession() {
+      state.token = null;
+      state.user = null;
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+    }
+
+    function router() {
+      const hash = window.location.hash || "#/";
+      const [_, route, param] = hash.split("/");
+      updateNavBar();
+
+      if (!route || route === "") {
+        renderHome();
+      } else if (route === "login") {
+        renderLogin();
+      } else if (route === "upload") {
+        renderUpload();
+      } else if (route === "torrent" && param) {
+        renderTorrentDetail(param);
+      } else if (route === "logout") {
+        handleLogout();
+      } else {
+        document.getElementById("app").innerHTML = "<p>Pagina non trovata</p>";
+      }
+    }
+
+    function updateNavBar() {
+      const navLogin = document.getElementById("nav-login");
+      const navLogout = document.getElementById("nav-logout");
+      if (state.user) {
+        navLogin.style.display = "none";
+        navLogout.style.display = "inline";
+      } else {
+        navLogin.style.display = "inline";
+        navLogout.style.display = "none";
+      }
+    }
+
+    async function renderHome() {
+      const app = document.getElementById("app");
+      let torrents = [];
+      try {
+        torrents = await apiGet("/torrents");
+      } catch (e) {
+        app.innerHTML = "<p>Errore nel caricamento dei torrent.</p>";
+        return;
+      }
+
+      state.torrents = torrents;
+
+      app.innerHTML = `
+        <h2>Lista torrent</h2>
+        <div class="card">
+          <h3>Ricerca per titolo</h3>
+          <form id="search-form">
+            <input type="text" id="search-title" placeholder="Cerca nel titolo..." />
+            <button type="submit">Cerca</button>
+          </form>
+        </div>
+        <div id="torrent-list">
+          ${renderTorrentListItems(torrents)}
+        </div>
+      `;
+
+      document.getElementById("search-form").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const term = document.getElementById("search-title").value.toLowerCase();
+        const filtered = state.torrents.filter(t =>
+          t.title.toLowerCase().includes(term)
+        );
+        document.getElementById("torrent-list").innerHTML =
+          renderTorrentListItems(filtered);
+        attachTorrentClickHandlers();
+      });
+
+      attachTorrentClickHandlers();
+    }
+
+    function renderTorrentListItems(torrents) {
+      if (!torrents || torrents.length === 0) {
+        return "<p>Nessun torrent trovato.</p>";
+      }
+      return torrents.map(t => `
+        <div class="card">
+          <h3 class="link" data-id="${t.id}">${t.title}</h3>
+          <p>${t.description}</p>
+          <p><strong>Dimensione:</strong> ${formatSize(t.size)}</p>
+          <p>${t.categories.map(c => `<span class="badge">${c}</span>`).join(" ")}</p>
+          <p><strong>Download:</strong> ${t.downloadCount} | <strong>Voto medio:</strong> ${t.averageRating}</p>
+        </div>
+      `).join("");
+    }
+
+    function attachTorrentClickHandlers() {
+      document.querySelectorAll("h3[data-id]").forEach(el => {
+        el.addEventListener("click", () => {
+          const id = el.getAttribute("data-id");
+          window.location.hash = "#/torrent/" + id;
+        });
+      });
+    }
+
+    function formatSize(bytes) {
+      if (bytes == null) return "-";
+      const mb = bytes / (1024 * 1024);
+      if (mb < 1000) return mb.toFixed(1) + " MB";
+      const gb = mb / 1024;
+      return gb.toFixed(2) + " GB";
+    }
+
+    function renderLogin() {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <h2>Login</h2>
+        <div class="card">
+          <form id="login-form">
+            <label>Email</label>
+            <input type="email" id="login-email" required />
+            <label>Password</label>
+            <input type="password" id="login-password" required />
+            <button type="submit">Entra</button>
+            <div id="login-message"></div>
+          </form>
+          <p>Non hai un account? <span class="link" id="go-register">Registrati</span></p>
+        </div>
+      `;
+
+      document.getElementById("go-register").addEventListener("click", renderRegister);
+
+      const form = document.getElementById("login-form");
+      const msgDiv = document.getElementById("login-message");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const email = document.getElementById("login-email").value;
+        const password = document.getElementById("login-password").value;
+        msgDiv.textContent = "Login in corso...";
+        msgDiv.className = "";
+        try {
+          const data = await apiPost("/auth/login", { email, password });
+          state.token = data.token;
+          state.user = data.user;
+          saveSession();
+          msgDiv.textContent = "Login effettuato!";
+          msgDiv.className = "success";
+          window.location.hash = "#/";
+        } catch (err) {
+          msgDiv.textContent = err.message;
+          msgDiv.className = "error";
+        }
+      });
+    }
+
+    function renderRegister() {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <h2>Registrazione</h2>
+        <div class="card">
+          <form id="reg-form">
+            <label>Username</label>
+            <input type="text" id="reg-username" required />
+            <label>Email</label>
+            <input type="email" id="reg-email" required />
+            <label>Password</label>
+            <input type="password" id="reg-password" required />
+            <button type="submit">Registrati</button>
+            <div id="reg-message"></div>
+          </form>
+          <p>Hai già un account? <a href="#/login">Vai al login</a></p>
+        </div>
+      `;
+
+      const form = document.getElementById("reg-form");
+      const msgDiv = document.getElementById("reg-message");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const username = document.getElementById("reg-username").value;
+        const email = document.getElementById("reg-email").value;
+        const password = document.getElementById("reg-password").value;
+        msgDiv.textContent = "Registrazione in corso...";
+        msgDiv.className = "";
+        try {
+          await apiPost("/auth/register", { username, email, password });
+          msgDiv.textContent = "Registrazione completata. Ora puoi fare login.";
+          msgDiv.className = "success";
+        } catch (err) {
+          msgDiv.textContent = err.message;
+          msgDiv.className = "error";
+        }
+      });
+    }
+
+    function handleLogout() {
+      clearSession();
+      updateNavBar();
+      window.location.hash = "#/";
+    }
+
+    function renderUpload() {
+      const app = document.getElementById("app");
+      if (!state.user) {
+        app.innerHTML = `
+          <h2>Carica torrent</h2>
+          <p>Devi essere loggato per caricare un torrent.</p>
+          <p><a href="#/login">Vai al login</a></p>
+        `;
+        return;
+      }
+
+      app.innerHTML = `
+        <h2>Carica un nuovo torrent</h2>
+        <div class="card">
+          <form id="upload-form">
+            <label>Titolo</label>
+            <input type="text" id="up-title" required />
+            <label>Descrizione (max 160 caratteri)</label>
+            <textarea id="up-desc" maxlength="160" required></textarea>
+            <label>Dimensione (in byte)</label>
+            <input type="number" id="up-size" required />
+            <label>Categorie (separate da virgole)</label>
+            <input type="text" id="up-categories" required />
+            <label>URL file .torrent</label>
+            <input type="text" id="up-url" required />
+            <button type="submit">Carica</button>
+            <div id="upload-message"></div>
+          </form>
+        </div>
+      `;
+
+      const form = document.getElementById("upload-form");
+      const msgDiv = document.getElementById("upload-message");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const title = document.getElementById("up-title").value;
+        const description = document.getElementById("up-desc").value;
+        const size = Number(document.getElementById("up-size").value);
+        const categories = document.getElementById("up-categories").value
+          .split(",").map(c => c.trim()).filter(c => c);
+        const torrentFileUrl = document.getElementById("up-url").value;
+
+        msgDiv.textContent = "Invio dati...";
+        msgDiv.className = "";
+
+        try {
+          await apiPost("/torrents", { title, description, size, categories, torrentFileUrl });
+          msgDiv.textContent = "Torrent caricato!";
+          msgDiv.className = "success";
+        } catch (err) {
+          msgDiv.textContent = err.message;
+          msgDiv.className = "error";
+        }
+      });
+    }
+
+    async function renderTorrentDetail(id) {
+      const app = document.getElementById("app");
+      let torrent;
+      try {
+        torrent = await apiGet("/torrents/" + id);
+      } catch (e) {
+        app.innerHTML = "<p>Errore nel caricamento del torrent.</p>";
+        return;
+      }
+
+      app.innerHTML = `
+        <h2>${torrent.title}</h2>
+        <div class="card">
+          <p>${torrent.description}</p>
+          <p><strong>Dimensione:</strong> ${formatSize(torrent.size)}</p>
+          <p>${torrent.categories.map(c => `<span class="badge">${c}</span>`).join(" ")}</p>
+          <p><strong>Download:</strong> ${torrent.downloadCount}</p>
+          <p><strong>Voto medio:</strong> ${torrent.averageRating}</p>
+          ${state.user ? `<button id="btn-download">Scarica</button>` : "<p>Devi essere loggato per scaricare.</p>"}
+          <p><a href="#/">&larr; Torna alla lista</a></p>
+        </div>
+        <div id="comments"></div>
+      `;
+
+      if (state.user) {
+        document.getElementById("btn-download").addEventListener("click", async () => {
+          try {
+            const data = await apiGet(`/torrents/${id}/download`);
+            alert("Download conteggiato. URL file torrent: " + data.torrentFileUrl);
+          } catch (e) {
+            alert(e.message);
+          }
+        });
+      }
+
+      renderComments(id);
+    }
+
+    async function renderComments(torrentId) {
+      const container = document.getElementById("comments");
+      let comments = [];
+      try {
+        comments = await apiGet(`/torrents/${torrentId}/comments`);
+      } catch (e) {
+        container.innerHTML = "<p>Errore nel caricamento dei commenti.</p>";
+        return;
+      }
+
+      let html = "<h3>Commenti</h3>";
+      if (comments.length === 0) {
+        html += "<p>Nessun commento.</p>";
+      } else {
+        html += comments.map(c => `
+          <div class="card">
+            <p><strong>Voto:</strong> ${c.rating}/5</p>
+            <p>${c.text}</p>
+          </div>
+        `).join("");
+      }
+
+      if (state.user) {
+        html += `
+          <div class="card">
+            <h4>Lascia un commento</h4>
+            <form id="comment-form">
+              <label>Voto (1-5)</label>
+              <input type="number" id="comment-rating" min="1" max="5" required />
+              <label>Testo (max 160 caratteri)</label>
+              <textarea id="comment-text" maxlength="160" required></textarea>
+              <button type="submit">Invia</button>
+              <div id="comment-message"></div>
+            </form>
+          </div>
+        `;
+      } else {
+        html += "<p>Devi essere loggato per commentare.</p>";
+      }
+
+      container.innerHTML = html;
+
+      if (state.user) {
+        const form = document.getElementById("comment-form");
+        const msgDiv = document.getElementById("comment-message");
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const rating = Number(document.getElementById("comment-rating").value);
+          const text = document.getElementById("comment-text").value;
+          msgDiv.textContent = "Invio commento...";
+          msgDiv.className = "";
+          try {
+            await apiPost(`/torrents/${torrentId}/comments`, { rating, text });
+            msgDiv.textContent = "Commento inserito.";
+            msgDiv.className = "success";
+            renderComments(torrentId);
+          } catch (err) {
+            msgDiv.textContent = err.message;
+            msgDiv.className = "error";
+          }
+        });
+      }
+    }
+
+    window.addEventListener("hashchange", router);
+    window.addEventListener("DOMContentLoaded", () => {
+      loadSession();
+      router();
+    });
+  </script>
+</body>
+</html>
