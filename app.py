@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 # =========================
-# CONFIG
+# CONFIGURAZIONE
 # =========================
 
 MONGODB_URI = os.getenv(
@@ -20,35 +20,39 @@ JWT_SECRET = os.getenv("JWT_SECRET", "Lory_Torrent_App_Secret_12345")
 JWT_ALGORITHM = "HS256"
 
 client = MongoClient(MONGODB_URI)
-db = client["torrent_platform"]
+db = client["Verifica_Torrent"]        # <--- nome DB come su Atlas
 
-users_col = db["users"]
+users_col = db["utenti"]               # <--- nome collection utenti
 torrents_col = db["torrents"]
-comments_col = db["comments"]
+comments_col = db["commenti"]
 
 app = Flask(__name__)
 CORS(app)
 
 
 # =========================
-# UTILITY
+# FUNZIONI DI SUPPORTO
 # =========================
 
 def get_next_id(collection):
-    doc = collection.find_one(sort=[("_id", -1)])
-    if doc and "_id" in doc:
-        return int(doc["_id"]) + 1
+    """Usa il campo 'id' numerico, non _id."""
+    doc = collection.find_one(sort=[("id", -1)])
+    if doc and "id" in doc:
+        return int(doc["id"]) + 1
     return 1
 
 
 def create_token(user_doc):
     payload = {
-        "userId": int(user_doc["_id"]),
+        "userId": int(user_doc["id"]),
         "role": user_doc.get("role", "user"),
         "isBanned": user_doc.get("isBanned", False),
         "exp": datetime.utcnow() + timedelta(hours=2)
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    # PyJWT può restituire bytes in alcune versioni
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
     return token
 
 
@@ -94,7 +98,7 @@ def require_role(*roles):
 
 def user_to_public(u):
     return {
-        "id": int(u["_id"]),
+        "id": int(u["id"]),
         "username": u["username"],
         "email": u["email"],
         "role": u.get("role", "user"),
@@ -104,7 +108,7 @@ def user_to_public(u):
 
 def torrent_to_public(t):
     return {
-        "id": int(t["_id"]),
+        "id": int(t["id"]),
         "title": t["title"],
         "description": t["description"],
         "size": t["size"],
@@ -121,7 +125,7 @@ def torrent_to_public(t):
 
 def comment_to_public(c):
     return {
-        "id": int(c["_id"]),
+        "id": int(c["id"]),
         "torrentId": c["torrentId"],
         "userId": c["userId"],
         "rating": c["rating"],
@@ -134,10 +138,13 @@ def comment_to_public(c):
 def update_torrent_average(torrent_id):
     comments = list(comments_col.find({"torrentId": torrent_id}))
     if not comments:
-        torrents_col.update_one({"_id": torrent_id}, {"$set": {"averageRating": 0}})
+        torrents_col.update_one({"id": torrent_id}, {"$set": {"averageRating": 0}})
         return
     avg = sum(c["rating"] for c in comments) / len(comments)
-    torrents_col.update_one({"_id": torrent_id}, {"$set": {"averageRating": round(avg, 2)}})
+    torrents_col.update_one(
+        {"id": torrent_id},
+        {"$set": {"averageRating": round(avg, 2)}}
+    )
 
 
 # =========================
@@ -183,15 +190,17 @@ def register():
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     new_id = get_next_id(users_col)
+    now = datetime.utcnow().isoformat()
+
     user_doc = {
-        "_id": new_id,
+        "id": new_id,
         "username": username,
         "email": email,
         "passwordHash": password_hash,
         "role": "user",
         "isBanned": False,
-        "createdAt": datetime.utcnow().isoformat(),
-        "updatedAt": datetime.utcnow().isoformat()
+        "createdAt": now,
+        "updatedAt": now
     }
 
     users_col.insert_one(user_doc)
@@ -233,14 +242,14 @@ def login():
 @app.route("/api/auth/me", methods=["GET"])
 @auth_required
 def me():
-    u = users_col.find_one({"_id": request.user["id"]})
+    u = users_col.find_one({"id": request.user["id"]})
     if not u:
         return jsonify({"message": "Utente non trovato"}), 404
     return jsonify({"user": user_to_public(u)})
 
 
 # =========================
-# API TORRENT
+# API TORRENTS
 # =========================
 
 @app.route("/api/torrents", methods=["POST"])
@@ -264,7 +273,7 @@ def create_torrent():
     now = datetime.utcnow().isoformat()
 
     torrent_doc = {
-        "_id": new_id,
+        "id": new_id,
         "title": title,
         "description": description,
         "size": int(size),
@@ -326,7 +335,7 @@ def list_torrents():
 
 @app.route("/api/torrents/<int:torrent_id>", methods=["GET"])
 def get_torrent(torrent_id):
-    t = torrents_col.find_one({"_id": torrent_id})
+    t = torrents_col.find_one({"id": torrent_id})
     if not t:
         return jsonify({"message": "Torrent non trovato"}), 404
     return jsonify(torrent_to_public(t))
@@ -338,11 +347,11 @@ def download_torrent(torrent_id):
     if request.user["isBanned"]:
         return jsonify({"message": "Utente bannato, non può scaricare"}), 403
 
-    t = torrents_col.find_one({"_id": torrent_id})
+    t = torrents_col.find_one({"id": torrent_id})
     if not t:
         return jsonify({"message": "Torrent non trovato"}), 404
 
-    torrents_col.update_one({"_id": torrent_id}, {"$inc": {"downloadCount": 1}})
+    torrents_col.update_one({"id": torrent_id}, {"$inc": {"downloadCount": 1}})
 
     return jsonify({
         "message": "Download conteggiato",
@@ -354,7 +363,7 @@ def download_torrent(torrent_id):
 @auth_required
 @require_role("moderator", "admin")
 def delete_torrent(torrent_id):
-    res = torrents_col.delete_one({"_id": torrent_id})
+    res = torrents_col.delete_one({"id": torrent_id})
     if res.deleted_count == 0:
         return jsonify({"message": "Torrent non trovato"}), 404
     comments_col.delete_many({"torrentId": torrent_id})
@@ -399,7 +408,7 @@ def create_comment(torrent_id):
     now = datetime.utcnow().isoformat()
 
     comment_doc = {
-        "_id": new_id,
+        "id": new_id,
         "torrentId": torrent_id,
         "userId": request.user["id"],
         "rating": rating,
@@ -415,20 +424,20 @@ def create_comment(torrent_id):
 @app.route("/api/comments/<int:comment_id>", methods=["DELETE"])
 @auth_required
 def delete_comment(comment_id):
-    comment = comments_col.find_one({"_id": comment_id})
+    comment = comments_col.find_one({"id": comment_id})
     if not comment:
         return jsonify({"message": "Commento non trovato"}), 404
 
     if comment["userId"] != request.user["id"] and request.user["role"] not in ("moderator", "admin"):
         return jsonify({"message": "Non autorizzato"}), 403
 
-    comments_col.delete_one({"_id": comment_id})
+    comments_col.delete_one({"id": comment_id})
     update_torrent_average(comment["torrentId"])
     return jsonify({"message": "Commento cancellato"})
 
 
 # =========================
-# API STATISTICHE (admin)
+# API STATISTICHE (ADMIN)
 # =========================
 
 @app.route("/api/stats/top-torrents", methods=["GET"])
